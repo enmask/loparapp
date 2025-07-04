@@ -1,8 +1,8 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 import 'dart:ui'; // Behövs för PointMode.points
+import 'dart:math' as math; // Behövs för math.cos och math.pi
 
 void main() {
   runApp(const MyApp());
@@ -35,8 +35,7 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
   StreamSubscription<Position>? _positionStreamSubscription;
   bool _isTracking = false;
   Position? _firstPosition;
-  // Lägg till en variabel för aktuell altitud
-  double _currentAltitude = 0.0; // Standardvärde innan första positionen
+  double _currentAltitude = 0.0;
 
   @override
   void initState() {
@@ -90,12 +89,12 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
       _isTracking = true;
       _routePositions.clear();
       _firstPosition = null;
-      _currentAltitude = 0.0; // Återställ altitud vid start
+      _currentAltitude = 0.0;
     });
 
     const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 5, // 0: Received all updates. Was: 5
+      distanceFilter: 0,
     );
 
     _positionStreamSubscription = Geolocator.getPositionStream(locationSettings: locationSettings)
@@ -108,7 +107,6 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
           print('[Geolocator Stream] Första referenspunkt satt: ${_firstPosition!.latitude}, ${_firstPosition!.longitude}');
         }
         _routePositions.add(position);
-        // Uppdatera aktuell altitud med 1 decimal
         _currentAltitude = double.parse(position.altitude.toStringAsFixed(1));
 
         if (_routePositions.length % 10 == 0) {
@@ -139,17 +137,15 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // VIKTIGT: Fånga in screen size här för att få rätt dimensioner
     final Size screenSize = MediaQuery.of(context).size;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Min Löparapp'),
       ),
-      // Använd Stack för att lägga text ovanpå CustomPaint
       body: Stack(
         children: [
-          SizedBox.expand( // Tvingar CustomPaint att expandera till hela tillgängliga ytan
+          SizedBox.expand(
             child: CustomPaint(
               painter: RoutePainter(
                 routePositions: List.of(_routePositions),
@@ -158,18 +154,17 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
               ),
             ),
           ),
-          // Lägg till Text-widgeten för altituden
           Positioned(
-            top: 10, // Justera positionen som du vill
+            top: 10,
             left: 10,
             child: Container(
               padding: const EdgeInsets.all(8.0),
               decoration: BoxDecoration(
-                color: Colors.black54, // Bakgrund för läsbarhet
+                color: Colors.black54,
                 borderRadius: BorderRadius.circular(5.0),
               ),
               child: Text(
-                'Altitud: ${_currentAltitude.toStringAsFixed(1)} m', // Visa med 1 decimal
+                'Altitud: ${_currentAltitude.toStringAsFixed(1)} m',
                 style: const TextStyle(color: Colors.white, fontSize: 18),
               ),
             ),
@@ -189,7 +184,7 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
 class RoutePainter extends CustomPainter {
   final List<Position> routePositions;
   final Position? firstPosition;
-  final Size canvasSize; // Denna används nu korrekt tack vare SizedBox.expand
+  final Size canvasSize;
 
   RoutePainter({
     required this.routePositions,
@@ -199,16 +194,14 @@ class RoutePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    print('[RoutePainter - paint] paint-metoden anropad. Antal rutter: ${routePositions.length}. Canvas Size: ${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}');
+    print('[RoutePainter - paint] paint-metoden anropad. Antal rutter: ${routePositions.length}. Canvas Size: ${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}}');
 
-    // TESTLINJE: Om du vill ta bort den röda testlinjen nu när allt fungerar,
-    // kommentera bort eller ta bort följande rader.
+    // TESTLINJE: Kan tas bort när allt fungerar som det ska.
     final Paint testPaint = Paint()
       ..color = Colors.red
       ..strokeWidth = 10.0
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
-
     canvas.drawLine(Offset(size.width * 0.25, size.height * 0.25),
                     Offset(size.width * 0.75, size.height * 0.75),
                     testPaint);
@@ -220,54 +213,90 @@ class RoutePainter extends CustomPainter {
       if (routePositions.length == 1 && firstPosition != null) {
         final Paint dotPaint = Paint()..color = Colors.red ..strokeWidth = 10.0 ..strokeCap = StrokeCap.round;
         final Offset firstOffset = _gpsToCanvas(firstPosition!, firstPosition!, canvasSize);
-
         print('[RoutePainter - paint] Ritar ensam prick vid: ${firstOffset.dx.toStringAsFixed(2)}, ${firstOffset.dy.toStringAsFixed(2)}');
         canvas.drawPoints(PointMode.points, [firstOffset], dotPaint);
       }
       return;
     }
 
-    final Paint paint = Paint()
+    final Paint routeLinePaint = Paint()
       ..color = Colors.blue
       ..strokeWidth = 5.0
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
+    final Paint altitudeLinePaint = Paint() // Färg för altitudstrecken
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
     final Path path = Path();
+    final double firstAltitude = firstPosition!.altitude; // Referensaltitud
 
     final Offset startOffset = _gpsToCanvas(routePositions[0], firstPosition!, canvasSize);
     path.moveTo(startOffset.dx, startOffset.dy);
 
-    print('[RoutePainter - paint] Path startad vid: ${startOffset.dx.toStringAsFixed(2)}, ${startOffset.dy.toStringAsFixed(2)}');
+    // Rita första altitudstrecket
+    //_drawAltitudeLine(canvas, routePositions[0], startOffset, firstAltitude, altitudeLinePaint);
+    // TEST, use fixed ref altitude
+    _drawAltitudeLine(canvas, routePositions[0], startOffset, 40.0, altitudeLinePaint);
 
     for (int i = 1; i < routePositions.length; i++) {
       final Offset currentOffset = _gpsToCanvas(routePositions[i], firstPosition!, canvasSize);
       path.lineTo(currentOffset.dx, currentOffset.dy);
-      // Logga inte varje punkt, blir för mycket. Var 5:e eller sista.
+
+      // Rita altitudstreck för varje punkt
+      //_drawAltitudeLine(canvas, routePositions[i], currentOffset, firstAltitude, altitudeLinePaint);
+      // TEST, use fixed ref altitude
+      _drawAltitudeLine(canvas, routePositions[i], currentOffset, 40.0, altitudeLinePaint);
+
+
       if (i % 5 == 0 || i == routePositions.length -1) {
         print('[RoutePainter - paint] Linje till punkt ${i}: ${currentOffset.dx.toStringAsFixed(2)}, ${currentOffset.dy.toStringAsFixed(2)}');
       }
     }
 
-    print('[RoutePainter - paint] Anropar canvas.drawPath för att rita rutten.');
-    canvas.drawPath(path, paint);
+    canvas.drawPath(path, routeLinePaint);
   }
 
+  // Ny metod för att rita ett altitudstreck
+  void _drawAltitudeLine(Canvas canvas, Position currentPosition, Offset canvasPoint, double firstAltitude, Paint paint) {
+    // Definiera en skala för hur många pixlar 1 meter i altitud motsvarar.
+    // Justera detta värde för att göra strecken längre/kortare.
+    const double altitudePixelScale = 15.5; // 0.5 pixlar per meter skillnad. Was: 0.5
+
+    final double altitudeDifference = currentPosition.altitude - firstAltitude;
+    final double lineLength = altitudeDifference * altitudePixelScale;
+
+    // Välj färg baserat på altitudskillnaden
+    if (altitudeDifference > 0) {
+      paint.color = Colors.red.withOpacity(0.7); // Uppåt (högre än start)
+    } else if (altitudeDifference < 0) {
+      paint.color = Colors.green.withOpacity(0.7); // Nedåt (lägre än start)
+    } else {
+      paint.color = Colors.grey.withOpacity(0.5); // Platt (samma som start)
+    }
+
+    // Rita strecket. Det sträcker sig vertikalt från ruttpunkten.
+    // Positiv lineLength ritas uppåt (negativ y-förändring)
+    // Negativ lineLength ritas nedåt (positiv y-förändring)
+    canvas.drawLine(
+      canvasPoint,
+      Offset(canvasPoint.dx, canvasPoint.dy - lineLength), // 'minus lineLength' för att uppåt är mindre y-koordinat
+      paint,
+    );
+
+    print('  [AltitudeLine] Altituddiff: ${altitudeDifference.toStringAsFixed(1)}m. Längd: ${lineLength.toStringAsFixed(1)}px. Färg: ${paint.color}.');
+  }
+
+
   Offset _gpsToCanvas(Position currentPosition, Position refPosition, Size canvasSize) {
-    // Justera denna konstant för att skala rutten.
-    // Mindre värde = mer zoomat in, större rörelse på skärmen
-    // Större värde = mer zoomat ut, mindre rörelse på skärmen
     const double pixelsPerDegree = 800000.0; // Finjustera detta efter behov och test
 
     final double deltaLongitude = currentPosition.longitude - refPosition.longitude;
     final double deltaLatitude = currentPosition.latitude - refPosition.latitude;
 
-    // Här har vi ändrat ordningen på y-axeln så att positiva latitud-förändringar
-    // (norrut) ritas uppåt på skärmen (mindre y-värde).
-    // Multiplikation med cosinus för att kompensera för longituders konvergens vid polerna.
-    // Denna är inte helt exakt för mycket stora avstånd men fungerar bra lokalt.
     final double x = deltaLongitude * pixelsPerDegree * math.cos(refPosition.latitude * math.pi / 180.0);
-    final double y = -deltaLatitude * pixelsPerDegree; // Negativ för att y-axeln går nedåt i Flutter
+    final double y = -deltaLatitude * pixelsPerDegree;
 
     final double offsetX = canvasSize.width / 2;
     final double offsetY = canvasSize.height / 2;
@@ -275,18 +304,11 @@ class RoutePainter extends CustomPainter {
     final double finalX = x + offsetX;
     final double finalY = y + offsetY;
 
-    print('[RoutePainter - _gpsToCanvas] Input Lat/Lon: ${currentPosition.latitude.toStringAsFixed(6)}, ${currentPosition.longitude.toStringAsFixed(6)}');
-    print('[RoutePainter - _gpsToCanvas] Delta X/Y (relativ): ${x.toStringAsFixed(2)}, ${y.toStringAsFixed(2)}');
-    print('[RoutePainter - _gpsToCanvas] Canvas Offset: ${offsetX.toStringAsFixed(2)}, ${offsetY.toStringAsFixed(2)}');
-    print('[RoutePainter - _gpsToCanvas] Final Canvas Coords: ${finalX.toStringAsFixed(2)}, ${finalY.toStringAsFixed(2)}');
-
     return Offset(finalX, finalY);
   }
 
   @override
   bool shouldRepaint(covariant RoutePainter oldDelegate) {
-    // Logga för att se vad som händer
-    print('shouldRepaint called and will return ${oldDelegate.routePositions.length != routePositions.length} because oldDelegate.routePositions.length == ${oldDelegate.routePositions.length} and routePositions.length == ${routePositions.length}');
     return oldDelegate.routePositions.length != routePositions.length;
   }
 }
