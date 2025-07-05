@@ -94,7 +94,7 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
 
     const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 0,
+      distanceFilter: 0, // Ta emot alla uppdateringar
     );
 
     _positionStreamSubscription = Geolocator.getPositionStream(locationSettings: locationSettings)
@@ -182,9 +182,12 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
 // ---
 
 class RoutePainter extends CustomPainter {
+  static const double FIXED_REF_ALTITUDE = 38.0;
+
   final List<Position> routePositions;
   final Position? firstPosition;
   final Size canvasSize;
+
 
   RoutePainter({
     required this.routePositions,
@@ -221,53 +224,77 @@ class RoutePainter extends CustomPainter {
 
     final Paint routeLinePaint = Paint()
       ..color = Colors.blue
-      ..strokeWidth = 5.0
+      ..strokeWidth = 2.0
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
     final Paint altitudeLinePaint = Paint() // Färg för altitudstrecken
-      ..strokeWidth = 2.0
+      ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
 
-    final Path path = Path();
+    final Paint altitudeProfilePaint = Paint() // <<< NYTT: Färg för altitudprofilens linje >>>
+      ..color = Colors.purple // Välj en färg som passar
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final Path routePath = Path(); // Byt namn för tydlighet
+    final Path altitudeProfilePath = Path(); // <<< NYTT: Sökväg för altitudprofilen >>>
+
     final double firstAltitude = firstPosition!.altitude; // Referensaltitud
 
+    // Konvertera första GPS-punkten till canvas-koordinater
     final Offset startOffset = _gpsToCanvas(routePositions[0], firstPosition!, canvasSize);
-    path.moveTo(startOffset.dx, startOffset.dy);
+    routePath.moveTo(startOffset.dx, startOffset.dy); // Starta ruttlinjen
+
+    // Beräkna och flytta till första punkten för altitudprofilen
+    final Offset firstAltitudeOffset = _getAltitudeCanvasOffset(routePositions[0], startOffset, /*firstAltitude*/ FIXED_REF_ALTITUDE);
+    altitudeProfilePath.moveTo(firstAltitudeOffset.dx, firstAltitudeOffset.dy); // <<< NYTT: Starta altitudprofilens linje >>>
 
     // Rita första altitudstrecket
-    //_drawAltitudeLine(canvas, routePositions[0], startOffset, firstAltitude, altitudeLinePaint);
-    // TEST, use fixed ref altitude
-    _drawAltitudeLine(canvas, routePositions[0], startOffset, 40.0, altitudeLinePaint);
+    _drawAltitudeLine(canvas, routePositions[0], startOffset, /*firstAltitude*/ FIXED_REF_ALTITUDE, altitudeLinePaint);
 
     for (int i = 1; i < routePositions.length; i++) {
       final Offset currentOffset = _gpsToCanvas(routePositions[i], firstPosition!, canvasSize);
-      path.lineTo(currentOffset.dx, currentOffset.dy);
+      routePath.lineTo(currentOffset.dx, currentOffset.dy); // Fortsätt ruttlinjen
+
+      // Beräkna och dra linje till nästa punkt för altitudprofilen
+      final Offset currentAltitudeOffset = _getAltitudeCanvasOffset(routePositions[i], currentOffset, /*firstAltitude*/ FIXED_REF_ALTITUDE);
+      altitudeProfilePath.lineTo(currentAltitudeOffset.dx, currentAltitudeOffset.dy); // <<< NYTT: Fortsätt altitudprofilens linje >>>
 
       // Rita altitudstreck för varje punkt
-      //_drawAltitudeLine(canvas, routePositions[i], currentOffset, firstAltitude, altitudeLinePaint);
-      // TEST, use fixed ref altitude
-      _drawAltitudeLine(canvas, routePositions[i], currentOffset, 40.0, altitudeLinePaint);
-
+      _drawAltitudeLine(canvas, routePositions[i], currentOffset, /*firstAltitude*/ FIXED_REF_ALTITUDE, altitudeLinePaint);
 
       if (i % 5 == 0 || i == routePositions.length -1) {
         print('[RoutePainter - paint] Linje till punkt ${i}: ${currentOffset.dx.toStringAsFixed(2)}, ${currentOffset.dy.toStringAsFixed(2)}');
       }
     }
 
-    canvas.drawPath(path, routeLinePaint);
+    canvas.drawPath(routePath, routeLinePaint); // Rita den blå ruttlinjen
+    canvas.drawPath(altitudeProfilePath, altitudeProfilePaint); // <<< NYTT: Rita altitudprofilens linje >>>
   }
 
-  // Ny metod för att rita ett altitudstreck
+  // Ny metod för att beräkna altitudens offset på canvasen
+  Offset _getAltitudeCanvasOffset(Position currentPosition, Offset canvasPoint, double firstAltitude) {
+    const double altitudePixelScale = 5.5; // 0.5 pixlar per meter skillnad
+
+    final double altitudeDifference = currentPosition.altitude - firstAltitude;
+    final double verticalOffset = -altitudeDifference * altitudePixelScale; // Negativ för att högre altitud ska ritas högre upp (mindre y-värde)
+
+    // Altitudprofilen ritas horisontellt parallellt med rutten, men med en vertikal offset
+    // baserad på altituden. Vi lägger till en liten fast offset för att den inte ska krocka
+    // med den blå ruttlinjen om altitudskillnaden är noll.
+    const double baseVerticalOffset = /*-20.0*/ 1.0; // Flytta altitudlinjen 20 pixlar uppåt från ruttlinjen
+    return Offset(canvasPoint.dx, canvasPoint.dy + baseVerticalOffset + verticalOffset);
+  }
+
+  // Befintlig metod för att rita ett altitudstreck
   void _drawAltitudeLine(Canvas canvas, Position currentPosition, Offset canvasPoint, double firstAltitude, Paint paint) {
-    // Definiera en skala för hur många pixlar 1 meter i altitud motsvarar.
-    // Justera detta värde för att göra strecken längre/kortare.
-    const double altitudePixelScale = 15.5; // 0.5 pixlar per meter skillnad. Was: 0.5
+    const double altitudePixelScale = 5.5; // 0.5 pixlar per meter skillnad
 
     final double altitudeDifference = currentPosition.altitude - firstAltitude;
     final double lineLength = altitudeDifference * altitudePixelScale;
 
-    // Välj färg baserat på altitudskillnaden
     if (altitudeDifference > 0) {
       paint.color = Colors.red.withOpacity(0.7); // Uppåt (högre än start)
     } else if (altitudeDifference < 0) {
@@ -276,21 +303,19 @@ class RoutePainter extends CustomPainter {
       paint.color = Colors.grey.withOpacity(0.5); // Platt (samma som start)
     }
 
-    // Rita strecket. Det sträcker sig vertikalt från ruttpunkten.
-    // Positiv lineLength ritas uppåt (negativ y-förändring)
-    // Negativ lineLength ritas nedåt (positiv y-förändring)
     canvas.drawLine(
       canvasPoint,
       Offset(canvasPoint.dx, canvasPoint.dy - lineLength), // 'minus lineLength' för att uppåt är mindre y-koordinat
       paint,
     );
-
-    print('  [AltitudeLine] Altituddiff: ${altitudeDifference.toStringAsFixed(1)}m. Längd: ${lineLength.toStringAsFixed(1)}px. Färg: ${paint.color}.');
   }
 
 
   Offset _gpsToCanvas(Position currentPosition, Position refPosition, Size canvasSize) {
-    const double pixelsPerDegree = 800000.0; // Finjustera detta efter behov och test
+    // With 800000, the full screen width of around 400 pixels corresponds to about a distance of 20m
+    // With 40000, the full screen width of around 400 pixels corresponds to about a distance of 400m
+    // With 4000, the full screen width of around 400 pixels corresponds to about a distance of 4km
+    const double pixelsPerDegree = 20000.0; // Finjustera detta efter behov och test. Was: 800000.0
 
     final double deltaLongitude = currentPosition.longitude - refPosition.longitude;
     final double deltaLatitude = currentPosition.latitude - refPosition.latitude;
