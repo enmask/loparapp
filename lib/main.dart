@@ -36,6 +36,8 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
   bool _isTracking = false;
   Position? _firstPosition;
   double _currentAltitude = 0.0;
+  // Ny zoomfaktor
+  double _zoomFactor = 1.0; // 1.0 är standardzoom
 
   @override
   void initState() {
@@ -90,6 +92,7 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
       _routePositions.clear();
       _firstPosition = null;
       _currentAltitude = 0.0;
+      _zoomFactor = 1.0; // Återställ zoom vid ny spårning
     });
 
     const LocationSettings locationSettings = LocationSettings(
@@ -135,6 +138,22 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
     super.dispose();
   }
 
+  // Ny metod för att zooma in
+  void _zoomIn() {
+    setState(() {
+      _zoomFactor = (_zoomFactor * 1.2).clamp(0.01, 250.0); // Öka med 20%, begränsa mellan 0.5x och 5x. Was: (0.5, 5.0)
+      print('[Zoom] Zoomar in. Ny zoomfaktor: $_zoomFactor');
+    });
+  }
+
+  // Ny metod för att zooma ut
+  void _zoomOut() {
+    setState(() {
+      _zoomFactor = (_zoomFactor / 1.2).clamp(0.01, 250.0); // Minska med 20%, begränsa mellan 0.5x och 5x
+      print('[Zoom] Zoomar ut. Ny zoomfaktor: $_zoomFactor');
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final Size screenSize = MediaQuery.of(context).size;
@@ -151,6 +170,7 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
                 routePositions: List.of(_routePositions),
                 firstPosition: _firstPosition,
                 canvasSize: screenSize,
+                zoomFactor: _zoomFactor, // Skicka med zoomfaktorn
               ),
             ),
           ),
@@ -169,12 +189,37 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
               ),
             ),
           ),
+          // Flytande knappar för zoom
+          Positioned(
+            bottom: 100, // Justera position
+            right: 16,
+            child: Column(
+              children: [
+                FloatingActionButton(
+                  heroTag: "zoomInBtn", // Unikt heroTag för varje FAB
+                  mini: true, // Gör knappen mindre
+                  onPressed: _zoomIn,
+                  child: const Icon(Icons.add),
+                ),
+                const SizedBox(height: 8), // Mellanslag mellan knapparna
+                FloatingActionButton(
+                  heroTag: "zoomOutBtn", // Unikt heroTag
+                  mini: true, // Gör knappen mindre
+                  onPressed: _zoomOut,
+                  child: const Icon(Icons.remove),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
+      // Befintlig FloatingActionButton för start/stopp
       floatingActionButton: FloatingActionButton(
+        heroTag: "startStopBtn", // Unikt heroTag
         onPressed: _isTracking ? _stopTracking : _startTracking,
         child: Icon(_isTracking ? Icons.stop : Icons.play_arrow),
       ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat, // Standardposition längst ner till höger
     );
   }
 }
@@ -182,22 +227,26 @@ class _RunTrackerScreenState extends State<RunTrackerScreen> {
 // ---
 
 class RoutePainter extends CustomPainter {
-  static const double FIXED_REF_ALTITUDE = 38.0;
-
   final List<Position> routePositions;
   final Position? firstPosition;
   final Size canvasSize;
-
+  final double zoomFactor; // Ny parameter för zoomfaktor
 
   RoutePainter({
     required this.routePositions,
     this.firstPosition,
     required this.canvasSize,
+    required this.zoomFactor, // Måste inkluderas i konstruktorn
   });
+
+  // Lägg till din konstanta här i klassen
+  static const double FIXED_REF_ALTITUDE = 100.0; // Exempelvärde
 
   @override
   void paint(Canvas canvas, Size size) {
     print('[RoutePainter - paint] paint-metoden anropad. Antal rutter: ${routePositions.length}. Canvas Size: ${size.width.toStringAsFixed(0)}x${size.height.toStringAsFixed(0)}}');
+    print('[RoutePainter - paint] Aktuell Zoom Faktor: ${zoomFactor.toStringAsFixed(2)}');
+
 
     // TESTLINJE: Kan tas bort när allt fungerar som det ska.
     final Paint testPaint = Paint()
@@ -215,7 +264,8 @@ class RoutePainter extends CustomPainter {
     if (routePositions.length < 2 || firstPosition == null) {
       if (routePositions.length == 1 && firstPosition != null) {
         final Paint dotPaint = Paint()..color = Colors.red ..strokeWidth = 10.0 ..strokeCap = StrokeCap.round;
-        final Offset firstOffset = _gpsToCanvas(firstPosition!, firstPosition!, canvasSize);
+        // Skicka med zoomFactor till _gpsToCanvas
+        final Offset firstOffset = _gpsToCanvas(firstPosition!, firstPosition!, canvasSize, zoomFactor);
         print('[RoutePainter - paint] Ritar ensam prick vid: ${firstOffset.dx.toStringAsFixed(2)}, ${firstOffset.dy.toStringAsFixed(2)}');
         canvas.drawPoints(PointMode.points, [firstOffset], dotPaint);
       }
@@ -224,46 +274,45 @@ class RoutePainter extends CustomPainter {
 
     final Paint routeLinePaint = Paint()
       ..color = Colors.blue
-      ..strokeWidth = 2.0
+      ..strokeWidth = 5.0
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
     final Paint altitudeLinePaint = Paint() // Färg för altitudstrecken
-      ..strokeWidth = 1.0
+      ..strokeWidth = 2.0
       ..style = PaintingStyle.stroke;
 
-    final Paint altitudeProfilePaint = Paint() // <<< NYTT: Färg för altitudprofilens linje >>>
-      ..color = Colors.purple // Välj en färg som passar
+    final Paint altitudeProfilePaint = Paint() // Färg för altitudprofilens linje
+      ..color = Colors.purple
       ..strokeWidth = 2.0
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    final Path routePath = Path(); // Byt namn för tydlighet
-    final Path altitudeProfilePath = Path(); // <<< NYTT: Sökväg för altitudprofilen >>>
+    final Path routePath = Path();
+    final Path altitudeProfilePath = Path();
 
-    final double firstAltitude = firstPosition!.altitude; // Referensaltitud
+    // Använd den fasta referensaltituden
+    final double referenceAltitude = FIXED_REF_ALTITUDE;
 
     // Konvertera första GPS-punkten till canvas-koordinater
-    final Offset startOffset = _gpsToCanvas(routePositions[0], firstPosition!, canvasSize);
+    final Offset startOffset = _gpsToCanvas(routePositions[0], firstPosition!, canvasSize, zoomFactor); // Skicka med zoomFactor
     routePath.moveTo(startOffset.dx, startOffset.dy); // Starta ruttlinjen
 
     // Beräkna och flytta till första punkten för altitudprofilen
-    final Offset firstAltitudeOffset = _getAltitudeCanvasOffset(routePositions[0], startOffset, /*firstAltitude*/ FIXED_REF_ALTITUDE);
-    altitudeProfilePath.moveTo(firstAltitudeOffset.dx, firstAltitudeOffset.dy); // <<< NYTT: Starta altitudprofilens linje >>>
+    final Offset firstAltitudeOffset = _getAltitudeCanvasOffset(routePositions[0], startOffset, referenceAltitude);
+    altitudeProfilePath.moveTo(firstAltitudeOffset.dx, firstAltitudeOffset.dy); // Starta altitudprofilens linje
 
-    // Rita första altitudstrecket
-    _drawAltitudeLine(canvas, routePositions[0], startOffset, /*firstAltitude*/ FIXED_REF_ALTITUDE, altitudeLinePaint);
+    _drawAltitudeLine(canvas, routePositions[0], startOffset, referenceAltitude, altitudeLinePaint);
 
     for (int i = 1; i < routePositions.length; i++) {
-      final Offset currentOffset = _gpsToCanvas(routePositions[i], firstPosition!, canvasSize);
+      final Offset currentOffset = _gpsToCanvas(routePositions[i], firstPosition!, canvasSize, zoomFactor); // Skicka med zoomFactor
       routePath.lineTo(currentOffset.dx, currentOffset.dy); // Fortsätt ruttlinjen
 
       // Beräkna och dra linje till nästa punkt för altitudprofilen
-      final Offset currentAltitudeOffset = _getAltitudeCanvasOffset(routePositions[i], currentOffset, /*firstAltitude*/ FIXED_REF_ALTITUDE);
-      altitudeProfilePath.lineTo(currentAltitudeOffset.dx, currentAltitudeOffset.dy); // <<< NYTT: Fortsätt altitudprofilens linje >>>
+      final Offset currentAltitudeOffset = _getAltitudeCanvasOffset(routePositions[i], currentOffset, referenceAltitude);
+      altitudeProfilePath.lineTo(currentAltitudeOffset.dx, currentAltitudeOffset.dy); // Fortsätt altitudprofilens linje
 
-      // Rita altitudstreck för varje punkt
-      _drawAltitudeLine(canvas, routePositions[i], currentOffset, /*firstAltitude*/ FIXED_REF_ALTITUDE, altitudeLinePaint);
+      _drawAltitudeLine(canvas, routePositions[i], currentOffset, referenceAltitude, altitudeLinePaint);
 
       if (i % 5 == 0 || i == routePositions.length -1) {
         print('[RoutePainter - paint] Linje till punkt ${i}: ${currentOffset.dx.toStringAsFixed(2)}, ${currentOffset.dy.toStringAsFixed(2)}');
@@ -271,57 +320,54 @@ class RoutePainter extends CustomPainter {
     }
 
     canvas.drawPath(routePath, routeLinePaint); // Rita den blå ruttlinjen
-    canvas.drawPath(altitudeProfilePath, altitudeProfilePaint); // <<< NYTT: Rita altitudprofilens linje >>>
+    canvas.drawPath(altitudeProfilePath, altitudeProfilePaint); // Rita altitudprofilens linje
   }
 
-  // Ny metod för att beräkna altitudens offset på canvasen
-  Offset _getAltitudeCanvasOffset(Position currentPosition, Offset canvasPoint, double firstAltitude) {
-    const double altitudePixelScale = 5.5; // 0.5 pixlar per meter skillnad
-
-    final double altitudeDifference = currentPosition.altitude - firstAltitude;
-    final double verticalOffset = -altitudeDifference * altitudePixelScale; // Negativ för att högre altitud ska ritas högre upp (mindre y-värde)
-
-    // Altitudprofilen ritas horisontellt parallellt med rutten, men med en vertikal offset
-    // baserad på altituden. Vi lägger till en liten fast offset för att den inte ska krocka
-    // med den blå ruttlinjen om altitudskillnaden är noll.
-    const double baseVerticalOffset = /*-20.0*/ 1.0; // Flytta altitudlinjen 20 pixlar uppåt från ruttlinjen
+  // Ingen ändring här då den endast hanterar altitud och inte kart-zoom
+  Offset _getAltitudeCanvasOffset(Position currentPosition, Offset canvasPoint, double referenceAltitude) {
+    const double altitudePixelScale = 0.5;
+    final double altitudeDifference = currentPosition.altitude - referenceAltitude;
+    final double verticalOffset = -altitudeDifference * altitudePixelScale;
+    const double baseVerticalOffset = 0.0; // Was -20.0
     return Offset(canvasPoint.dx, canvasPoint.dy + baseVerticalOffset + verticalOffset);
   }
 
   // Befintlig metod för att rita ett altitudstreck
-  void _drawAltitudeLine(Canvas canvas, Position currentPosition, Offset canvasPoint, double firstAltitude, Paint paint) {
-    const double altitudePixelScale = 5.5; // 0.5 pixlar per meter skillnad
+  void _drawAltitudeLine(Canvas canvas, Position currentPosition, Offset canvasPoint, double referenceAltitude, Paint paint) {
+    const double altitudePixelScale = 0.5;
 
-    final double altitudeDifference = currentPosition.altitude - firstAltitude;
+    final double altitudeDifference = currentPosition.altitude - referenceAltitude;
     final double lineLength = altitudeDifference * altitudePixelScale;
 
     if (altitudeDifference > 0) {
-      paint.color = Colors.red.withOpacity(0.7); // Uppåt (högre än start)
+      paint.color = Colors.red.withOpacity(0.7);
     } else if (altitudeDifference < 0) {
-      paint.color = Colors.green.withOpacity(0.7); // Nedåt (lägre än start)
+      paint.color = Colors.green.withOpacity(0.7);
     } else {
-      paint.color = Colors.grey.withOpacity(0.5); // Platt (samma som start)
+      paint.color = Colors.grey.withOpacity(0.5);
     }
 
     canvas.drawLine(
       canvasPoint,
-      Offset(canvasPoint.dx, canvasPoint.dy - lineLength), // 'minus lineLength' för att uppåt är mindre y-koordinat
+      Offset(canvasPoint.dx, canvasPoint.dy - lineLength),
       paint,
     );
   }
 
-
-  Offset _gpsToCanvas(Position currentPosition, Position refPosition, Size canvasSize) {
-    // With 800000, the full screen width of around 400 pixels corresponds to about a distance of 20m
-    // With 40000, the full screen width of around 400 pixels corresponds to about a distance of 400m
-    // With 4000, the full screen width of around 400 pixels corresponds to about a distance of 4km
-    const double pixelsPerDegree = 20000.0; // Finjustera detta efter behov och test. Was: 800000.0
+  // Ändrad: tar nu emot zoomFactor
+  Offset _gpsToCanvas(Position currentPosition, Position refPosition, Size canvasSize, double zoomFactor) {
+    // Justera denna konstant för att skala rutten.
+    // Mindre värde = mer zoomat in, större rörelse på skärmen
+    // Större värde = mer zoomat ut, mindre rörelse på skärmen
+    // Multiplicera med zoomFactor för att kontrollera skalan
+    const double basePixelsPerDegree = 800000.0;
+    final double effectivePixelsPerDegree = basePixelsPerDegree * zoomFactor; // Använd zoomfaktorn här
 
     final double deltaLongitude = currentPosition.longitude - refPosition.longitude;
     final double deltaLatitude = currentPosition.latitude - refPosition.latitude;
 
-    final double x = deltaLongitude * pixelsPerDegree * math.cos(refPosition.latitude * math.pi / 180.0);
-    final double y = -deltaLatitude * pixelsPerDegree;
+    final double x = deltaLongitude * effectivePixelsPerDegree * math.cos(refPosition.latitude * math.pi / 180.0);
+    final double y = -deltaLatitude * effectivePixelsPerDegree;
 
     final double offsetX = canvasSize.width / 2;
     final double offsetY = canvasSize.height / 2;
@@ -334,6 +380,8 @@ class RoutePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant RoutePainter oldDelegate) {
-    return oldDelegate.routePositions.length != routePositions.length;
+    // Nu måste vi även rita om om zoomfaktorn ändras
+    return oldDelegate.routePositions.length != routePositions.length ||
+           oldDelegate.zoomFactor != zoomFactor;
   }
 }
